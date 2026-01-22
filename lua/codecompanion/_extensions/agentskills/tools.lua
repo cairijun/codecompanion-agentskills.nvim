@@ -205,6 +205,13 @@ function Tools.run_skill_script()
       end,
     },
     output = {
+      prompt = function(self, tools)
+        return string.format("Confirm to run script from skill '%s' ?\n%s %s",
+          self.args.skill_name,
+          self.args.script_path,
+          table.concat(self.args.args or {}, " ")
+        )
+      end,
       success = function(self, tools, cmd, output)
         local output = output[#output]
         local for_user = string.format(

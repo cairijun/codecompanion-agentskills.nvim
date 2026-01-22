@@ -71,6 +71,11 @@ function Extension.setup(opts)
   }
   tools_config.run_skill_script = {
     callback = tools.run_skill_script,
+    opts = {
+      allowed_in_yolo_mode = false,
+      require_approval_before = true,
+      require_cmd_approval = true,
+    },
     visible = false,
   }
   tools_config.groups.agent_skills = {
