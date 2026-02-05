@@ -100,6 +100,21 @@ Extension.exports = {
   Skill = Skill,
   discover = discover_skills,
   get_skills = Extension.get_skills,
+  setup = Extension.setup,
 }
+
+-- Auto-initialize the extension when loaded by CodeCompanion
+local function try_auto_setup()
+  local ok, cc_config = pcall(require, "codecompanion.config")
+  if ok and cc_config.options and cc_config.options.extensions and cc_config.options.extensions.agentskills then
+    local ext_config = cc_config.options.extensions.agentskills
+    if ext_config.enabled ~= false and ext_config.opts then
+      Extension.setup(ext_config.opts)
+    end
+  end
+end
+
+-- Defer auto-setup to ensure CodeCompanion is fully loaded
+vim.schedule(try_auto_setup)
 
 return Extension
