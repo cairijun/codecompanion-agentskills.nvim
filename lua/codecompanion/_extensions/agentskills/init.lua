@@ -46,10 +46,15 @@ local function discover_skills()
       return false
     end
 
-    local function scan_skills(dir, depth, max_depth, result)
+    local function scan_skills(dir, depth, max_depth, result, visited)
       if depth > max_depth then
         return
       end
+      local real = vim.uv.fs_realpath(dir)
+      if not real or visited[real] then
+        return
+      end
+      visited[real] = true
       if not is_dir_or_symlink_dir(dir) then
         return
       end
@@ -71,15 +76,16 @@ local function discover_skills()
         if name:sub(1, 1) ~= "." and not current_opts.ignore_dirs[name] then
           local child = vim.fs.joinpath(dir, name)
           if is_dir_or_symlink_dir(child) then
-            scan_skills(child, depth + 1, max_depth, result)
+            scan_skills(child, depth + 1, max_depth, result, visited)
           end
         end
       end
     end
 
     local skill_files = {}
-    scan_skills(path, 0, recursive and 99 or 1, skill_files)
+    scan_skills(path, 0, recursive and 99 or 1, skill_files, {})
     log:info("Found skill files: %s", skill_files)
+
 
     for _, skill_dir in ipairs(skill_files) do
       local ok, skill = pcall(Skill.load, skill_dir)
