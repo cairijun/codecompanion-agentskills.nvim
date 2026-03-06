@@ -30,16 +30,51 @@ local function discover_skills()
     path = vim.fs.normalize(path)
 
     log:info("Scanning skills in %s", path_spec)
-    local skill_files = scandir.scan_dir(path, {
-      search_pattern = function(dir)
-        return vim.uv.fs_stat(vim.fs.joinpath(dir, "SKILL.md")) ~= nil
-      end,
-      depth = recursive and 99 or 1,
-      add_dirs = true,
-      only_dirs = true,
-      hidden = false,
-      respect_gitignore = true,
-    })
+    -- Custom scan to follow symlinked directories
+    local function is_dir_or_symlink_dir(p)
+      local stat = vim.uv.fs_lstat(p)
+      if not stat then
+        return false
+      end
+      if stat.type == "directory" then
+        return true
+      end
+      if stat.type == "link" then
+        local target_stat = vim.uv.fs_stat(p)
+        return target_stat and target_stat.type == "directory"
+      end
+      return false
+    end
+
+    local function scan_skills(dir, depth, max_depth, result)
+      if depth > max_depth then
+        return
+      end
+      if not is_dir_or_symlink_dir(dir) then
+        return
+      end
+      local skill_md = vim.fs.joinpath(dir, "SKILL.md")
+      if vim.uv.fs_stat(skill_md) then
+        table.insert(result, dir)
+      end
+      local handle = vim.uv.fs_scandir(dir)
+      if not handle then
+        return
+      end
+      while true do
+        local name, typ = vim.uv.fs_scandir_next(handle)
+        if not name then
+          break
+        end
+        local child = vim.fs.joinpath(dir, name)
+        if is_dir_or_symlink_dir(child) then
+          scan_skills(child, depth + 1, max_depth, result)
+        end
+      end
+    end
+
+    local skill_files = {}
+    scan_skills(path, 1, recursive and 99 or 1, skill_files)
     log:info("Found skill files: %s", skill_files)
 
     for _, skill_dir in ipairs(skill_files) do
