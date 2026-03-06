@@ -74,7 +74,7 @@ local function discover_skills()
     end
 
     local skill_files = {}
-    scan_skills(path, 1, recursive and 99 or 1, skill_files)
+    scan_skills(path, 0, recursive and 99 or 1, skill_files)
     log:info("Found skill files: %s", skill_files)
 
     for _, skill_dir in ipairs(skill_files) do
