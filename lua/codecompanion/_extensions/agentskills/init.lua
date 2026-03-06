@@ -1,6 +1,5 @@
 local Skill = require("codecompanion._extensions.agentskills.skill")
 local log = require("codecompanion.utils.log")
-local scandir = require("plenary.scandir")
 
 local Extension = {}
 
@@ -10,6 +9,7 @@ local Extension = {}
 ---@type CodeCompanion.AgentSkills.Opts
 local current_opts = {
   paths = {},
+  ignore_dirs = {},
 }
 
 ---@type table<string, CodeCompanion.AgentSkills.Skill>?
@@ -61,17 +61,14 @@ local function discover_skills()
       if not handle then
         return
       end
-      local ignore_dirs = {
-        [".git"] = true,
-        ["node_modules"] = true,
-      }
+
       while true do
         local name, typ = vim.uv.fs_scandir_next(handle)
         if not name then
           break
         end
         -- Skip hidden directories and commonly ignored directories
-        if name:sub(1, 1) ~= "." and not ignore_dirs[name] then
+        if name:sub(1, 1) ~= "." and not current_opts.ignore_dirs[name] then
           local child = vim.fs.joinpath(dir, name)
           if is_dir_or_symlink_dir(child) then
             scan_skills(child, depth + 1, max_depth, result)
