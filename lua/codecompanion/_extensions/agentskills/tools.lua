@@ -241,7 +241,7 @@ Note: Only interpreters that support dependencies can use the 'dependencies' par
               description = [[List of runtime dependencies. Only supported by interpreters that support dependencies. E.g: ["requests", "numpy>=1.20"].]],
             },
           },
-          required = { "skill_name", "script_path", "interpreter" },
+          required = { "skill_name", "script_path", "args", "interpreter", "dependencies" },
         },
         strict = true,
       },
