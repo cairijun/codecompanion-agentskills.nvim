@@ -3,8 +3,28 @@ local log = require("codecompanion.utils.log")
 
 local Extension = {}
 
+--- Project-level skill paths (relative to cwd)
+local DEFAULT_PROJECT_SKILL_PATHS = {
+  ".github/skills",
+  ".cursor/skills",
+  ".claude/skills",
+  ".codex/skills",
+  ".agents/skills",
+}
+
+--- Personal skill paths (relative to home directory)
+local DEFAULT_PERSONAL_SKILL_PATHS = {
+  "~/.copilot/skills",
+  "~/.cursor/skills",
+  "~/.claude/skills",
+  "~/.codex/skills",
+  "~/.agents/skills",
+}
+
 ---@class CodeCompanion.AgentSkills.Opts
----@field paths (string | { [1]: string, recursive: boolean })[] List of paths to search for skills
+---@field paths (string | { [1]: string, recursive: boolean })[] Additional paths to search for skills
+---@field notify_on_discovery boolean Whether to notify about discovered skills (default: false)
+---@field make_slash_commands boolean Whether to register skills as slash commands (default: true)
 ---@field ignore_dirs? string[] List of directory names to ignore during skill discovery
 ---@field script_interpreters? table<string, table> Interpreter-specific configurations
 ---@field disable_demo_skill? boolean Disable the built-in demo-skill (default: false)
@@ -13,11 +33,36 @@ local Extension = {}
 ---@type CodeCompanion.AgentSkills.Opts
 local current_opts = {
   paths = {},
+  notify_on_discovery = false,
+  make_slash_commands = true,
   ignore_dirs = {},
 }
 
 ---@type table<string, CodeCompanion.AgentSkills.Skill>?
 local skills
+
+---@return (string | { [1]: string, recursive: boolean })[]
+local function get_all_paths()
+  local paths = {}
+
+  -- Add project-level default paths (relative to cwd)
+  local cwd = vim.fn.getcwd()
+  for _, rel_path in ipairs(DEFAULT_PROJECT_SKILL_PATHS) do
+    table.insert(paths, vim.fs.joinpath(cwd, rel_path))
+  end
+
+  -- Add personal default paths
+  for _, path in ipairs(DEFAULT_PERSONAL_SKILL_PATHS) do
+    table.insert(paths, path)
+  end
+
+  -- Add user-configured paths
+  for _, path_spec in ipairs(current_opts.paths) do
+    table.insert(paths, path_spec)
+  end
+
+  return paths
+end
 
 ---Register all discovered skills as editor context items
 local function register_editor_contexts()
@@ -59,7 +104,7 @@ end
 
 local function discover_skills()
   skills = {}
-  for _, path_spec in ipairs(current_opts.paths) do
+  for _, path_spec in ipairs(get_all_paths()) do
     -- Normalize path specification
     local path, recursive
     if type(path_spec) == "string" then
@@ -70,6 +115,12 @@ local function discover_skills()
       recursive = path_spec.recursive or false
     end
     path = vim.fs.normalize(path)
+
+    -- Skip non-existent directories
+    if not vim.uv.fs_stat(path) then
+      log:debug("Skipping non-existent skill path: %s", path)
+      goto continue
+    end
 
     log:info("Scanning skills in %s", path_spec)
     -- Custom scan to follow symlinked directories
@@ -136,6 +187,61 @@ local function discover_skills()
         log:warn("Failed to load skill %s: %s", skill_dir, skill)
       end
     end
+
+    ::continue::
+  end
+
+  if current_opts.notify_on_discovery then
+    local skill_names = vim.tbl_keys(skills)
+    if #skill_names > 0 then
+      table.sort(skill_names)
+      vim.notify(
+        string.format(
+          "[AgentSkills] Discovered %d skill(s): %s",
+          #skill_names,
+          table.concat(skill_names, ", ")
+        ),
+        vim.log.levels.INFO
+      )
+    else
+      vim.notify("[AgentSkills] No skills discovered", vim.log.levels.WARN)
+    end
+  end
+end
+
+--- Inject tools declared by a skill into an active chat
+---@param chat CodeCompanion.Chat
+---@param skill CodeCompanion.AgentSkills.Skill
+function Extension.inject_skill_tools(chat, skill)
+  local skill_tools = skill:tools()
+  if #skill_tools == 0 then
+    return
+  end
+
+  local cc_config = require("codecompanion.config")
+  local tools_config = cc_config.interactions.chat.tools
+  local in_use = chat.tool_registry.in_use
+
+  for _, tool_name in ipairs(skill_tools) do
+    if tools_config.groups[tool_name] then
+      -- Guard against duplicate group injection (upstream add_group lacks dedup)
+      local group_tools = tools_config.groups[tool_name].tools or {}
+      local all_loaded = #group_tools > 0
+      for _, t in ipairs(group_tools) do
+        if not in_use[t] then
+          all_loaded = false
+          break
+        end
+      end
+      if not all_loaded then
+        chat.tool_registry:add_group(tool_name, tools_config)
+      end
+    elseif tools_config[tool_name] then
+      -- Individual tools are already guarded by in_use in add()
+      chat.tool_registry:add(tool_name, tools_config[tool_name])
+    else
+      log:warn("Skill '%s' references unknown tool: %s", skill:name(), tool_name)
+    end
   end
 
   if not current_opts.disable_demo_skill then
@@ -176,7 +282,8 @@ function Extension.setup(opts)
   local cc_compat = require("codecompanion._extensions.agentskills.cc_compat")
   local tools_module = require("codecompanion._extensions.agentskills.tools")
 
-  local tools_config = require("codecompanion.config").interactions.chat.tools
+  local cc_config = require("codecompanion.config")
+  local tools_config = cc_config.interactions.chat.tools
   tools_config.activate_skill = {
     callback = cc_compat.decorate_tool(tools_module.activate_skill, version),
     visible = false,
@@ -194,6 +301,29 @@ function Extension.setup(opts)
     tools = { "activate_skill", "load_skill_file", "run_skill_script" },
     opts = { collapse_tools = true },
   }
+
+  -- Register skills as slash commands
+  if current_opts.make_slash_commands and skills then
+    local slash_commands_config = cc_config.interactions.chat.slash_commands
+    for name, skill in pairs(skills) do
+      if skill:is_user_invokable() then
+        slash_commands_config[name] = {
+          description = skill:argument_hint() or skill:description(),
+          callback = function(chat)
+            chat:add_message(
+              { role = cc_config.constants.USER_ROLE, content = skill:read_content() },
+              { visible = false }
+            )
+            Extension.inject_skill_tools(chat, skill)
+            vim.notify(string.format("[AgentSkills] Loaded skill: %s", name), vim.log.levels.INFO)
+          end,
+          opts = {
+            contains_code = false,
+          },
+        }
+      end
+    end
+  end
 end
 
 ---@return table<string, CodeCompanion.AgentSkills.Skill>?
@@ -216,6 +346,7 @@ Extension.exports = {
   Skill = Skill,
   discover = discover_skills,
   get_skills = Extension.get_skills,
+  inject_skill_tools = Extension.inject_skill_tools,
 }
 
 return Extension

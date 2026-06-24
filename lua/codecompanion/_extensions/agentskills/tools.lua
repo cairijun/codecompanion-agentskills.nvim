@@ -4,12 +4,29 @@ local Skill = require("codecompanion._extensions.agentskills.skill")
 
 local function make_system_prompt()
   local AS = require("codecompanion._extensions.agentskills")
-  local skill_list = vim
-    .iter(AS.get_skills())
-    :map(function(name, skill)
-      return string.format("- **%s**: %s", name, skill:description())
-    end)
-    :join("\n")
+  local auto_skills = {}
+  local manual_skills = {}
+
+  for name, skill in pairs(AS.get_skills()) do
+    if skill:is_auto_invocation_disabled() then
+      table.insert(manual_skills, string.format("- **%s**: %s", name, skill:description()))
+    else
+      table.insert(auto_skills, string.format("- **%s**: %s", name, skill:description()))
+    end
+  end
+
+  table.sort(auto_skills)
+  table.sort(manual_skills)
+
+  local skill_list = table.concat(auto_skills, "\n")
+  local manual_section = ""
+  if #manual_skills > 0 then
+    manual_section = string.format(
+      "\n\n## 🔧 Manual-Only Skills\nThe following skills are only activated when explicitly requested by name:\n%s",
+      table.concat(manual_skills, "\n")
+    )
+  end
+
   return string.format(
     [[# Agent Skills System
 
@@ -32,8 +49,9 @@ You are equipped with a **Progressive Disclosure Agent Skills System**. This all
 4. **AVOID REDUNDANT ACTIVATION**: If a skill's content has already been injected into the conversation (indicated by `<agent-skill name="xxx">` tags), do NOT call `activate_skill` for that same skill. The skill instructions are already in your context.
 
 ## 📦 Available Skills
-%s]],
-    skill_list
+%s%s]],
+    skill_list,
+    manual_section
   )
 end
 
@@ -86,9 +104,11 @@ function Tools.activate_skill()
     },
     output = {
       success = function(self, output, meta)
+        local AS = require("codecompanion._extensions.agentskills")
         local skill = output[#output] ---@type CodeCompanion.AgentSkills.Skill
         local for_user = string.format("Activated skill: %s", skill:name())
         meta.tools.chat:add_tool_output(self, skill:read_content(), for_user)
+        AS.inject_skill_tools(meta.tools.chat, skill)
       end,
       error = function(self, output, meta)
         local error_msg = string.format(
